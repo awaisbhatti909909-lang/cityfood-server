@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: cityfood-notifications
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node notify_server.js
+    envVars:
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false

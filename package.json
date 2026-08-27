@@ -1,0 +1,12 @@
+{
+  "name": "cityfood-notifications",
+  "version": "1.0.0",
+  "description": "CityFood FCM Notification Server",
+  "main": "notify_server.js",
+  "scripts": {
+    "start": "node notify_server.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^11.11.1"
+  }
+}

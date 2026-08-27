@@ -1,0 +1,23 @@
+# Sensitive files — NEVER push to GitHub
+city-food-7f19a-firebase-adminsdk-fbsvc-bf4fb64127.json
+
+# Node modules
+node_modules/
+
+# Flutter build files
+build/
+.dart_tool/
+flutter_export_environment.sh
+ephemeral/
+Generated.xcconfig
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
