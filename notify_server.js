@@ -32,8 +32,12 @@ const POLL_INTERVAL = 3000;
 let lastCheck = Date.now();
 
 async function sendFCM({ token, topic, title, body, data, orderId }) {
+  // Data-only, high-priority message — NOT a "notification" message.
+  // This ensures our Dart background handler actually runs (and can show
+  // a full-screen, siren-sounding alert) even when the app is killed;
+  // combined notification+data messages skip the Dart handler entirely
+  // when the app is terminated.
   const message = {
-    notification: { title, body },
     data: {
       ...data,
       title,
@@ -42,10 +46,6 @@ async function sendFCM({ token, topic, title, body, data, orderId }) {
     },
     android: {
       priority: 'high',
-      notification: {
-        channelId: 'cityfood_orders',
-        sound: 'order_alert',
-      },
     },
   };
 
@@ -136,4 +136,3 @@ console.log(`📡 Project: ${serviceAccount.project_id}`);
 console.log(`⏱️ Polling every ${POLL_INTERVAL / 1000}s...\n`);
 
 processQueue();
-setInterval(processQueue, POLL_INTERVAL);
