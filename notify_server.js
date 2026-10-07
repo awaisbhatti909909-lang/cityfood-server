@@ -28,7 +28,7 @@ admin.initializeApp({
 
 const db = admin.database();
 const messaging = admin.messaging();
-const POLL_INTERVAL = 3000;
+const POLL_INTERVAL = 1500;
 let lastCheck = Date.now();
 
 async function sendFCM({ token, topic, title, body, data, orderId }) {
@@ -86,8 +86,11 @@ async function processQueue() {
     if (!snapshot.exists()) return;
     const notifications = snapshot.val();
 
-    for (const [notifId, notif] of Object.entries(notifications)) {
-      if (notif.sent) continue;
+    // Dispatch every queued notification concurrently instead of one at a
+    // time — with several riders queued for the same order, a sequential
+    // loop made rider #5's push wait on riders #1-4's FCM round-trips first.
+    await Promise.all(Object.entries(notifications).map(async ([notifId, notif]) => {
+      if (notif.sent) return;
 
       console.log(`\n📨 ${notif.title}`);
 
@@ -113,7 +116,7 @@ async function processQueue() {
 
       await db.ref(`notificationQueue/${notifId}/sent`).set(true);
       await db.ref(`notificationQueue/${notifId}/sentAt`).set(new Date().toISOString());
-    }
+    }));
 
     lastCheck = Date.now();
   } catch (error) {
