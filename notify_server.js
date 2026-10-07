@@ -32,11 +32,11 @@ const POLL_INTERVAL = 3000;
 let lastCheck = Date.now();
 
 async function sendFCM({ token, topic, title, body, data, orderId }) {
-  // Data-only, high-priority message — NOT a "notification" message.
-  // This ensures our Dart background handler actually runs (and can show
-  // a full-screen, siren-sounding alert) even when the app is killed;
-  // combined notification+data messages skip the Dart handler entirely
-  // when the app is terminated.
+  // Data-only on purpose: a top-level `notification` block lets the Android
+  // system tray render the push directly while the app is killed, which
+  // skips Flutter's background isolate entirely — the merchant/rider siren
+  // and full-screen call UI never get a chance to run. Keeping everything
+  // in `data` forces every push through _onBackgroundMessage.
   const message = {
     data: {
       ...data,
@@ -46,6 +46,12 @@ async function sendFCM({ token, topic, title, body, data, orderId }) {
     },
     android: {
       priority: 'high',
+      // Route through whichever channel the sender actually asked for
+      // (e.g. delivery_high_alert_channel for new_order/available_order)
+      // instead of always forcing the low-alert default channel.
+      notification: {
+        channelId: data?.channelId || 'cityfood_orders',
+      },
     },
   };
 
@@ -136,3 +142,4 @@ console.log(`📡 Project: ${serviceAccount.project_id}`);
 console.log(`⏱️ Polling every ${POLL_INTERVAL / 1000}s...\n`);
 
 processQueue();
+setInterval(processQueue, POLL_INTERVAL);
