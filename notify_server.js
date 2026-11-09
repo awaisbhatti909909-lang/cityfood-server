@@ -92,9 +92,34 @@ async function processQueue() {
     await Promise.all(Object.entries(notifications).map(async ([notifId, notif]) => {
       if (notif.sent) return;
 
-      console.log(`\n📨 ${notif.title}`);
+      console.log(`\n📨 Processing notification: "${notif.title}" (targetUid: ${notif.targetUid || 'none'}, topic: ${notif.topic || 'none'})`);
 
-      if (notif.topic) {
+      let targetToken = notif.token;
+
+      // If token is missing but targetUid is specified, look up the user's current token from RTDB
+      if (!targetToken && notif.targetUid) {
+        try {
+          const userSnap = await db.ref(`users/${notif.targetUid}/fcmToken`).once('value');
+          targetToken = userSnap.val();
+        } catch (e) {
+          console.error(`Failed to fetch token for user ${notif.targetUid}:`, e.message);
+        }
+      }
+
+      // 1. Direct device push (Single user: customer, rider, or merchant)
+      if (targetToken) {
+        await sendFCM({
+          token: targetToken,
+          title: notif.title,
+          body: notif.body,
+          data: notif.data || {},
+          orderId: notif.data?.orderId,
+        });
+      } 
+      // 2. Broadcast to Topic ONLY if:
+      // - No single target token was specified
+      // - AND the topic is NOT 'customer_updates' (never broadcast private customer order status to all customers!)
+      else if (notif.topic && notif.topic !== 'customer_updates') {
         await sendFCM({
           topic: notif.topic,
           title: notif.title,
@@ -102,16 +127,8 @@ async function processQueue() {
           data: notif.data || {},
           orderId: notif.data?.orderId,
         });
-      }
-
-      if (notif.token) {
-        await sendFCM({
-          token: notif.token,
-          title: notif.title,
-          body: notif.body,
-          data: notif.data || {},
-          orderId: notif.data?.orderId,
-        });
+      } else {
+        console.log(`⚠️ Skipped broadcast for private/unroutable notification: ${notif.title}`);
       }
 
       await db.ref(`notificationQueue/${notifId}/sent`).set(true);
