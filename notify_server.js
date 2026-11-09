@@ -145,10 +145,93 @@ async function processQueue() {
 const http = require('http');
 const PORT = process.env.PORT || 3000;
 
-http.createServer((req, res) => {
-  if (req.url === '/health') {
+http.createServer(async (req, res) => {
+  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+  if (parsedUrl.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', project: serviceAccount.project_id }));
+  } else if (parsedUrl.pathname === '/api/customer-stats') {
+    try {
+      const usersSnap = await db.ref('users').once('value');
+      let totalCustomers = 0;
+      let activeTokens = 0;
+      if (usersSnap.exists()) {
+        usersSnap.forEach(child => {
+          const u = child.val();
+          if (!u.role || u.role === 'customer') {
+            totalCustomers++;
+            if (u.fcmToken && u.fcmToken.trim().length > 10) {
+              activeTokens++;
+            }
+          }
+        });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, totalCustomers, activeTokens }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else if (parsedUrl.pathname === '/api/broadcast-promo' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        if (payload.secret !== 'cityfood909_live_secret') {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Unauthorized broadcast request' }));
+        }
+
+        const title = payload.title || '🍕 30% Bumper Discount Offer!';
+        const messageBody = payload.body || "Rs 1,000 ka Pizza ab sirf Rs 700 mein! Promo Code 'CITYFOOD30' lagayein aur 30% discount payein. Abhi order karein!";
+
+        const usersSnap = await db.ref('users').once('value');
+        const customerList = [];
+        if (usersSnap.exists()) {
+          usersSnap.forEach(child => {
+            const u = child.val();
+            if ((!u.role || u.role === 'customer') && u.fcmToken && u.fcmToken.trim().length > 10) {
+              customerList.push({ uid: child.key, token: u.fcmToken });
+            }
+          });
+        }
+
+        console.log(`📢 Starting broadcast push to ${customerList.length} customer devices...`);
+
+        const results = await Promise.allSettled(customerList.map(c =>
+          sendFCM({
+            token: c.token,
+            title,
+            body: messageBody,
+            data: {
+              type: 'promo',
+              promoCode: 'CITYFOOD30',
+              channelId: 'cityfood_orders',
+              click_action: 'FLUTTER_NOTIFICATION_CLICK',
+            },
+          })
+        ));
+
+        const sent = results.filter(r => r.status === 'fulfilled').length;
+        const failed = results.filter(r => r.status === 'rejected').length;
+
+        console.log(`✅ Broadcast complete: ${sent} sent, ${failed} failed.`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          totalCustomersFound: customerList.length,
+          sent,
+          failed,
+        }));
+      } catch (err) {
+        console.error('Broadcast error:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('CityFood Notification Server is running');
