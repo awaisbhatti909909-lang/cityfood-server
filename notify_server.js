@@ -232,6 +232,140 @@ http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: err.message }));
       }
     });
+  } else if (parsedUrl.pathname === '/api/admin/order' && req.method === 'GET') {
+    try {
+      const orderNum = parsedUrl.searchParams.get('orderNumber');
+      if (!orderNum) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'orderNumber query parameter is required' }));
+      }
+
+      const cleanTarget = String(orderNum).replace(/#/g, '').trim();
+      const ordersSnap = await db.ref('orders').once('value');
+      let foundOrder = null;
+      let foundId = null;
+
+      if (ordersSnap.exists()) {
+        ordersSnap.forEach(child => {
+          const o = child.val();
+          const cleanNum = String(o.orderNumber || '').replace(/#/g, '').trim();
+          if (cleanNum === cleanTarget || child.key === cleanTarget) {
+            foundOrder = o;
+            foundId = child.key;
+          }
+        });
+      }
+
+      if (!foundOrder) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `Order #${orderNum} not found` }));
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, orderId: foundId, order: foundOrder }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else if (parsedUrl.pathname === '/api/admin/deliver-order' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        if (payload.secret !== 'cityfood909_live_secret') {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'Unauthorized' }));
+        }
+
+        const orderNum = payload.orderNumber;
+        if (!orderNum) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'orderNumber is required' }));
+        }
+
+        const cleanTarget = String(orderNum).replace(/#/g, '').trim();
+        const ordersSnap = await db.ref('orders').once('value');
+        let matchedOrderId = null;
+        let matchedOrder = null;
+
+        if (ordersSnap.exists()) {
+          ordersSnap.forEach(child => {
+            const o = child.val();
+            const cleanNum = String(o.orderNumber || '').replace(/#/g, '').trim();
+            if (cleanNum === cleanTarget || child.key === cleanTarget) {
+              matchedOrderId = child.key;
+              matchedOrder = o;
+            }
+          });
+        }
+
+        if (!matchedOrderId) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `Order #${orderNum} not found` }));
+        }
+
+        const now = new Date().toISOString();
+        const amountCollected = payload.amountCollected !== undefined 
+          ? Number(payload.amountCollected) 
+          : Number(matchedOrder.total || 419);
+
+        const updates = {
+          status: 'delivered',
+          paid: true,
+          amountCollected: amountCollected,
+          deliveredAt: now,
+          riderEarningApplied: true,
+          riderEarningCleared: false,
+        };
+
+        if (!matchedOrder.acceptedAt) updates.acceptedAt = now;
+        if (!matchedOrder.readyAt) updates.readyAt = now;
+        if (matchedOrder.riderId && !matchedOrder.assignedAt) updates.assignedAt = now;
+        if (!matchedOrder.pickedUpAt) updates.pickedUpAt = now;
+
+        await db.ref(`orders/${matchedOrderId}`).update(updates);
+        console.log(`✅ Order #${cleanTarget} (${matchedOrderId}) marked DELIVERED.`);
+
+        // Notify customer of delivery directly
+        if (matchedOrder.customerId) {
+          try {
+            const custSnap = await db.ref(`users/${matchedOrder.customerId}/fcmToken`).once('value');
+            const custToken = custSnap.val();
+            if (custToken) {
+              await sendFCM({
+                token: custToken,
+                title: 'Order Delivered!',
+                body: `Order #${cleanTarget} has been delivered. Enjoy your meal!`,
+                data: {
+                  type: 'order_delivered',
+                  orderId: matchedOrderId,
+                  channelId: 'cityfood_orders',
+                },
+                orderId: matchedOrderId,
+              });
+            }
+          } catch (e) {
+            console.error('Failed to notify customer:', e.message);
+          }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          orderId: matchedOrderId,
+          orderNumber: matchedOrder.orderNumber,
+          customerName: matchedOrder.customerName,
+          status: 'delivered',
+          amountCollected,
+          updatedFields: updates
+        }));
+      } catch (err) {
+        console.error('Deliver order error:', err);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('CityFood Notification Server is running');
